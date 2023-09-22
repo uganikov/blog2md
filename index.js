@@ -12,6 +12,8 @@ const path = require('path');
 const xml2js = require('xml2js');
 const sanitize = require('sanitize-filename');
 const TurndownService = require('turndown');
+const request = require('sync-request');
+const crypto = require('crypto');
 var moment = require('moment');
 
 var tds = new TurndownService({ codeBlockStyle: 'fenced', fence: '```' })
@@ -282,6 +284,45 @@ function bloggerImport(backupXmlFile, outputDir){
                  var fileContent = '';
                  var fileHeader = '';
                  var postMaps = {};
+		 var dname = '';
+
+	         tds.addRule('bloggerimganchor', {
+                     filter: function (node, options) {
+                         return (
+                             node.nodeName === 'A' &&
+                             node.hasChildNodes() &&
+                             (function() {
+                 		for (const cn of  node.childNodes) {
+                                     console.log(`cn ${cn}`);
+                                     if(cn.nodeName === 'IMG'){
+                    	                return true;
+                  	            }
+                 	        }
+                 		return false;
+                 	    }())
+                 //            node.getAttribute('imageanchor') === '1'
+                         )
+                     },
+                     replacement: function(content,node) {
+                         const options = {
+                             url: encodeURI(node.getAttribute('href')),
+                             method: 'GET',
+                             encoding: null
+                         };
+			 try{
+                             var response = request('GET', encodeURI(node.getAttribute('href')));
+                             if (response.statusCode === 200) {
+                                 var filename = crypto.randomUUID() + '.jpg'
+                                 fs.writeFileSync(dname + '/' + filename , response.getBody(), 'binary');
+                                 return '{{< image w="320" src="' + filename + '" >}}';
+                             }
+		        } catch(e){
+ 		            console.log(e.name + ': ' + e.message);
+			}
+                 	return '{{< remoteimage w="320" src="' + node.getAttribute('href') + '" >}}';
+                     }
+                 })
+
 
                 posts.forEach(function(entry){
                     var postMap = {};
@@ -315,11 +356,15 @@ function bloggerImport(backupXmlFile, outputDir){
                     if (urlLink && urlLink[0] && urlLink[0]['$'] && urlLink[0]['$'].href){
                         url = urlLink[0]['$'].href;
                     }
+                    var alias = url.replace(/^.*\/\/[^\/]+/, '');
 
-                    var fname = outputDir + '/' + path.basename(sanitizedTitle) + '.md';
+                    var fname = outputDir + '/' + alias.replace(/^\//,'').replace(/\//g,'_').replace(/\.html$/,'') + '/index.md';
+		    dname = path.dirname(fname);
+	            fs.mkdirSync(dname, {recursive: true});
+                    //var fname = outputDir + '/' + alias.replace(/\.html$/,'') + '.md';
                     console.log(fname);
                     postMap.postName = fname
-                    postMap.fname = fname.replace('.md', '-comments.md');
+                    postMap.fname = fname.replace('index.md', 'comments.md');
                     postMap.comments = [];
 
 
@@ -331,7 +376,11 @@ function bloggerImport(backupXmlFile, outputDir){
 
                         
                     }
-
+		    var thumbnail = markdown.match(/{{< image.*src=\"(.*)\"/)
+	            if(thumbnail){
+			    thumbnail = thumbnail[1]
+		    }
+	            console.log(thumbnail)
                     var tagLabel = [];
                     var tags = [];
 
@@ -359,9 +408,13 @@ function bloggerImport(backupXmlFile, outputDir){
 
                     console.log("\n\n\n\n\n");
 
-                    var alias = url.replace(/^.*\/\/[^\/]+/, '');
 
-                    fileHeader = `---\ntitle: '${title}'\ndate: ${published}\ndraft: ${draft}\nurl: ${alias}\n${tagString}---\n`;
+                    fileHeader = `---\ntitle: '${title}'\ndate: ${published}\ndraft: ${draft}\nurl: ${alias}\n`;
+		    if(thumbnail){
+			thumbnail = path.dirname(alias) + '/' + thumbnail;
+		        fileHeader = fileHeader + `thumbnail: ${thumbnail}\n`;
+		    }
+		    fileHeader = fileHeader + `${tagString}---\n`;
                     fileContent = `${fileHeader}\n${markdown}`;
 
                     postMap.header = fileHeader;
@@ -465,6 +518,8 @@ function writeToFile(filename, content, append=false){
     }else{
         console.log(`DEBUG: going to write to ${filename}`);
         try{
+	    var dir = filename.substring(0, filename.lastIndexOf("/"));
+	    fs.mkdirSync(dir, {recursive: true});
             fs.writeFileSync(filename, content);
             console.log(`Successfully written to ${filename}`);
         }
